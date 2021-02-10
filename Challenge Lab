@@ -1,1 +1,114 @@
-//New file
+Welcome to the Create-and-Manage-Cloud-Resources wiki!
+
+>$ gcloud auth list
+           Credentialed Accounts
+ACTIVE  ACCOUNT
+*       [ACCOUNT-NAME]
+
+To set the active account, run:
+    $ gcloud config set account `ACCOUNT`
+
+//STEP2:
+>$ gcloud config set compute/zone us-east1-b
+//(OUTPUT):
+Updated property [compute/zone].
+>$ gcloud container clusters create [CLUSTER-NAME]
+>$ kubectl create deployment team-server --image=gcr.io/google-samples/hello-app:2.0
+deployment.apps/team-server created
+>$ kubectl expose deployment team-server --type=LoadBalancer --port 8080
+service/team-server exposed
+>$ kubectl get service
+//Repeat this comment until the EXTERNAL-IP for 'team-server' change from <pending> to an IP 
+NAME          TYPE           CLUSTER-IP    EXTERNAL-IP     PORT(S)          AGE
+kubernetes    ClusterIP      10.3.240.1    <none>          443/TCP          2m37s
+team-server   LoadBalancer   10.3.254.70   35.227.85.101   8080:32658/TCP   40s
+>$ gcloud container clusters delete [CLUSTER-NAME]
+//Make sure to delete the cluster before moving to the next step due to the limited resources and the possibility of account blockage.
+The following clusters will be deleted.
+ - [CLUSTER-NAME] in [us-east1-b]
+Do you want to continue (Y/n)?  y
+Deleting cluster [CLUSTER-NAME]...done.
+Deleted [https://container.googleapis.com/v1/projects/qwiklabs.../zones/us-east1-b/clusters/[CLUSTER-NAME]].
+
+//STEP 3:
+//Just copy and paste the written code on cloud shell
+>$ cat << EOF > startup.sh
+> #! /bin/bash
+> apt-get update
+> apt-get install -y nginx
+> service nginx start
+> sed -i -- 's/nginx/Google Cloud Platform - '"\$HOSTNAME"'/' /var/www/html/index.nginx-debian.html
+> EOF
+>$ gcloud compute instance-templates create nginx-instance-template --metadata-from-file startup-script=startup.sh
+Created [https://www.googleapis.com/compute/v1/projects/qwiklabs.../global/instanceTemplates/nginx-instance-template].
+NAME                     MACHINE_TYPE   PREEMPTIBLE  CREATION_TIMESTAMP
+nginx-instance-template  n1-standard-1               2021-02-09T16:58:11.455-08:00
+>$ gcloud compute target-pools create nginx-target-pool
+//Say yes to the default zone
+Did you mean region [us-east1] for target pool: [nginx-pool] (Y/n)?  y
+Created [https://www.googleapis.com/compute/v1/projects/qwiklabs.../regions/us-east1/targetPools/nginx-target-pool].
+NAME               REGION    SESSION_AFFINITY  BACKUP  HEALTH_CHECKS
+nginx-target-pool  us-east1  NONE
+>$ gcloud compute instance-groups managed create nginx-managed-instance-group --base-instance-name=nginx --template=nginx-instance-template --size=2 --target-pool=nginx-target-pool
+//size=2 determines the number of instances that will be created in your managed instance group.
+Created [https://www.googleapis.com/compute/v1/projects/qwiklabs.../zones/us-east1-b/instanceGroupManagers/nginx-managed-instance-group].
+NAME                          LOCATION    SCOPE  BASE_INSTANCE_NAME  SIZE  TARGET_SIZE  INSTANCE_TEMPLATE  AUTOSCALED
+nginx-managed-instance-group  us-east1-b  zone   nginx               0     2            nginx-instance-template     no
+>$ gcloud compute instances list
+NAME        ZONE        MACHINE_TYPE   PREEMPTIBLE  INTERNAL_IP  EXTERNAL_IP    STATUS
+nginx-40q4  us-east1-b  n1-standard-1               10.142.0.7   35.185.74.190  RUNNING
+nginx-rpj8  us-east1-b  n1-standard-1               10.142.0.6   35.227.85.101  RUNNING
+student_04_772cb3a048d5@cloudshell:~ (qwiklabs-gcp-04-1f4a8fbbf0c4)$ curl http://35.185.74.190
+curl: Failed to connect to 35.185.74.190 port 80: Connection timed out
+//It fails because port 80 is still blocked. To allow port 80, run the following command and try to do curl again for both instances.
+>$ gcloud compute firewall-rules create nginx-firewall-rule --allow tcp:80
+Creating firewall...done.
+>$ curl http://35.185.74.190
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to Google Cloud Platform - nginx-40q4!</title>
+<style>
+    body {
+        width: 35em;
+        margin: 0 auto;
+        font-family: Tahoma, Verdana, Arial, sans-serif;
+    }
+</style>
+</head>
+<body>
+<h1>Welcome to Google Cloud Platform - nginx-40q4!</h1>
+<p>If you see this page, the Google Cloud Platform - nginx-40q4 web server is successfully installed and
+working. Further configuration is required.</p>
+<p>For online documentation and support please refer to
+<a href="http://Google Cloud Platform - nginx-40q4.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://Google Cloud Platform - nginx-40q4.com/">nginx.com</a>.</p>
+<p><em>Thank you for using Google Cloud Platform - nginx-40q4.</em></p>
+</body>
+</html>
+>$ gcloud compute forwarding-rules create nginx-forwarding-rule --region us-east1 --ports=80 --target-pool nginx-target-pool
+Created [].
+>$ gcloud compute forwarding-rules list
+NAME                   REGION    IP_ADDRESS     IP_PROTOCOL  TARGET
+nginx-forwarding-rule  us-east1  35.229.100.20  TCP          us-east1/targetPools/nginx-target-pool
+>$ gcloud compute health-checks create nginx-http-health-check --port 80
+Created [...].
+NAME                     HOST  PORT  REQUEST_PATH
+nginx-http-health-check        80    /
+>$ gcloud compute backend-services create nginx-backend-service --protocol=HTTP --port-name=http --health-checks=nginx-http-health-check --global
+Created [...].
+NAME                   BACKENDS  PROTOCOL
+nginx-backend-service            HTTP
+>$ gcloud compute backend-services add-backend nginx-backend-service --instance-group=nginx-managed-instance-group --instance-group-zone=us-east1-b --global
+Updated [...].
+>$ gcloud compute url-maps create nginx-url-map --default-service nginx-backend-service
+Created [...].
+NAME           DEFAULT_SERVICE
+nginx-url-map  backendServices/nginx-managed-instance-group
+>$ gcloud compute target-http-proxies create nginx-http-proxy --url-map nginx-url-map
+Created [...].
+NAME              URL_MAP
+nginx-http-proxy  nginx-url-map
+>$ gcloud compute forwarding-rules create nginx-http-content-rule --global --target-http-proxy=nginx-http-proxy --ports=80
+Created [...].
